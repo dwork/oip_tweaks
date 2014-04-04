@@ -1,0 +1,7 @@
+name = OIP Functions (tweaks)
+description = OIP's reusable PHP functons: Dollarfy ($num,$dec); Commify ($num)
+package = public-action
+version = 7.x-1.0
+core = 7.x
+files[] = oip_tweaks.module
+

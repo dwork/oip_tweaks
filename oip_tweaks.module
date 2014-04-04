@@ -1,0 +1,160 @@
+<?php
+/**
+ * Implement hook_form_views-exposed_form_alter
+ * We need to override the selection arrays to omit "Real Estate"
+ */
+function oip_tweaks_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'views_exposed_form') {
+    if ($form_state['view']->name == 'listings') {
+        $form['field_listprice_value']['min']['#size']='4';
+        $form['field_listprice_value']['max']['#size']='4';
+        $form['field_city_value']['#size']='20';
+        $form['field_beds_value']['#size']='3';
+        $form['field_baths_value']['#size']='3';
+        $form['field_sqft_value']['#size']='3';
+        $form['field_acreage_value']['#size']='3';
+    }
+    if ($form_state['view']->name == 'business_directory') {
+      // Get the list of categories
+	$taxonomyQuery = new EntityFieldQuery();
+  	$taxonomyTerms = $taxonomyQuery
+		->entityCondition('entity_type', 'taxonomy_term')
+    		->propertyCondition('vid', 6) //Company Type
+    		->execute();
+	foreach ($taxonomyTerms['taxonomy_term'] as $tid => $term) {
+          $tids[] = $term->tid;
+        }
+	$ary = taxonomy_term_load_multiple($tids);
+	$options = array();
+        foreach ($ary as $fields) {
+	  if ($fields->name <> 'Real Estate') {
+	    // Now, we need to see if the taxonomy term is on at least one active entity
+	      $query = new EntityFieldQuery();
+	      $query
+		 ->entityCondition('entity_type','user') 
+		 ->propertyCondition('status',1)
+		 ->fieldCondition('field_usertype','tid',$fields->tid,'=')
+		 ->count();
+	    if ($query->execute()>0) {
+	      $options[$fields->tid] = $fields->name;
+	    }
+	  }
+	}
+      $form['field_usertype_tid'] = array( 
+        '#type' => 'select',
+        '#multiple' => 'select',
+        '#options' => $options,
+        '#size' => 4,
+        '#default_value' => $options,
+      );
+    }
+  }
+}
+
+/**
+ * Returns field values as actual entities where possible,
+ * also allows selection of individual items to be returned
+ */
+function field_fetch_field_values($entity_type, $entity, $field_name, $get_delta = NULL, $get_key = NULL) {
+  $values = array();
+  if (isset($entity->$field_name) && !empty($entity->$field_name)) {
+    foreach (field_get_items($entity_type, $entity, $field_name) as $delta => $item) {
+      $value = $item;
+      $keys = array_keys($item);
+      if (count($keys)==1) {
+        $key = $keys[0];
+        switch ($key) {
+          case 'nid':
+            $value = array_shift(entity_load('node', array($item[$key])));
+            break;
+          case 'uid':
+            $value = array_shift(entity_load('user', array($item[$key])));
+            break;
+          case 'tid':
+            $value = array_shift(entity_load('taxonomy_term', array($item[$key])));
+            break;
+          case 'vid':
+            $value = array_shift(entity_load('taxonomy_vocabulary', array($item[$key])));
+            break;
+          case 'value':
+            $value = $item['value'];
+            break;
+        }
+      }
+      else {
+        if ($get_key && isset($item[$get_key])) {
+          $value = $item[$get_key];
+        }
+        elseif (array_key_exists('value', $item)) {
+          $value = isset($item['safe_value']) ? $item['safe_value'] : $item['value'];
+        }
+      }
+      $values[$delta] = $value;
+    }
+  }
+  if (is_numeric($get_delta)) {
+    return isset($values[$get_delta]) ? $values[$get_delta] : NULL;
+  }
+  return $values;
+}
+
+## Dollarfy Function
+function oip_tweaks_dollarfy ($num,$dec=0) {
+	 
+	$format="%.$dec" . "f";  
+        $number=sprintf($format,$num);
+        $str=strtok($number,".");
+        $dc=strtok(".");      
+        $str=commify($str);
+        $return="\$&nbsp;$str";
+
+        if ($dec!=0) { 
+                $return = "$return" . ".$dc";
+        } 
+        return($return); 
+}
+
+## Commify Function
+function oip_tweaks_commify ($str) { 
+        $n = strlen($str); 
+        if ($n <= 3) { 
+                $return=$str;
+        } 
+        else { 
+                $pre=substr($str,0,$n-3); 
+                $post=substr($str,$n-3,3); 
+                $pre=commify($pre); 
+                $return="$pre,$post"; 
+        }
+        return($return); 
+}
+
+## Shorthand entity print
+function oip_tweaks_entity ($str, $type = 'value') {
+ 	if (isset($str['und'])) {
+		$fld = $str['und'][0][$type];
+	} else {
+		$fld = '';
+	} 
+  	return $fld;
+}
+
+function oip_tweaks_gettid ($vname, $name) {
+
+  $voc = taxonomy_vocabulary_machine_name_load($vname);
+  $query = new EntityFieldQuery;
+  $result = $query
+  ->entityCondition('entity_type', 'taxonomy_term')
+  ->propertyCondition('name', $name)
+  ->propertyCondition('vid', $voc->vid)
+  ->execute();
+  if ($result) {
+    $keys = array_keys($result['taxonomy_term']);
+  } else {
+    drupal_set_message(t('Error: oip_tweaks_gettid (oip.module): Taxonomy term not found -- vname: '. $vname .'; name: '.$name));
+    return '';
+  }
+  return $keys[0];
+}
+
+?>
