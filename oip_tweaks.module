@@ -2,7 +2,231 @@
 /**
  * Implement hook_form_views-exposed_form_alter
  * We need to override the selection arrays to omit "Real Estate"
+ *
+ *  DCW 11/29/2014  Add oip_get_stats to retrieve listing_statistics for a particular listing
  */
+
+/**
+ *  Format the agent and phone# for display in views
+ */
+function oip_tweaks_format_agent ($agentid) {
+  $node = node_load($agentid);
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'user')
+    ->fieldCondition('field_agentid', 'value', $node->field_listingagentid['und'][0]['value'], '=');
+  $result = $query->execute();
+
+  if (isset($result['user'])) {
+    $user = user_load(current(array_keys($result['user'])));
+    $agent = $user->field_firstname['und'][0]['value'].' '.$user->field_lastname['und'][0]['value'].' '.oip_tweaks_format_phone($user->field_phone['und'][0]['number']);
+  } else {
+    $agent = "Not found: $data->field_listingagentid['und'][0]['value']";
+  }
+  return $agent;
+}
+
+/**
+ *  Format the phone# for display in views
+ */
+function oip_tweaks_format_phone($phone)
+{
+	$phone = preg_replace("/[^0-9]/", "", $phone);
+ 
+	if(strlen($phone) == 7)
+		return preg_replace("/([0-9]{3})([0-9]{4})/", "$1-$2", $phone);
+	elseif(strlen($phone) == 10)
+		return preg_replace("/([0-9]{3})([0-9]{3})([0-9]{4})/", "($1) $2-$3", $phone);
+	else
+		return $phone;
+}
+
+/**    
+ *  Accumulator routine for listing statistics
+ *  Given a particular listing, count hits between dates and of type "listing_type" 
+ *  Default: if $listing_type is blank, choose all. Else "Listing" or "Flyer"
+ */
+function oip_get_stats ($listing_id, $from_date, $to_date=0, $listing_type='All') {
+   if ($to_date == 0) {  // asking for the entire month
+      $yyyy = substr($from_date,0,4);
+      $mm = substr($from_date,4,2);
+      $f_date = mktime(0,0,0,$mm,1,$yyyy);
+      $meday = date('t',mktime(0,0,0,$mm,1,$yyyy));     // Ymt .. t = # days in the month
+      $t_date = mktime(23,59,59,$mm,$meday,$yyyy);    
+   } else {
+      $yyyy = substr($from_date,0,4);
+      $mm = substr($from_date,4,2);
+      $dd = substr($from_date,6,2);
+      $f_date = mktime(0,0,0,$mm,$dd,$yyyy);
+      $yyyy = substr($to_date,0,4);
+      $mm = substr($to_date,4,2);
+      $dd = substr($to_date,6,2);
+      $t_date = mktime(23,59,59,$mm,$dd,$yyyy);
+   }
+
+   $query = new EntityFieldQuery();
+
+   if ($listing_type=='All') {
+
+      $count = $query
+        ->entityCondition('entity_type', 'node')
+        ->entityCondition('bundle','listing_statistics')
+        ->propertyCondition('title', $listing_id)
+        ->fieldCondition('field_date', 'value', $f_date, '>=')
+        ->fieldCondition('field_date', 'value', $t_date, '<=')
+        ->addMetaData('account', user_load(1))
+        ->count() 
+        ->execute();
+ 
+      return $count;
+
+   } else {
+
+      $count = $query
+        ->entityCondition('entity_type', 'node')
+        ->entityCondition('bundle','listing_statistics')
+        ->propertyCondition('title',$listing_id,'=')
+        ->fieldCondition('field_date', 'value', $f_date, '>=')
+        ->fieldCondition('field_date', 'value', $t_date, '<=')
+        ->fieldCondition('field_view_type', 'value', $listing_type, '=')
+        ->addMetaData('account', user_load(1))
+        ->count() 
+        ->execute();
+      return $count;
+
+   }
+}
+
+//-----------------------------------------------------------------------------------------
+// For each member, accumulate and send out an email with current stats for each listing (listings with stats from last month and earlier, but only for listings with stats last month
+
+function oip_tweaks_send_statisics () {
+     // Open users
+     $query = new EntityFieldQuery();
+     $query->entityCondition('entity_type', 'user')
+           ->propertyCondition('status',1);
+     $result = $query->execute();
+     foreach($result['user'] as $this_user) {
+         $user = user_load ($this_user->uid);
+         if ($user->uid == 2) {
+            if (isset($user->roles['5'])
+             or isset($user->roles['6'])
+             or isset($user->roles['9'])  ) 
+            {
+               $body = _get_listings_at_monthend ($user);
+               $to = $user->mail;           // email address
+               $name = $user->name;           // login user name
+               $fullname = $user->field_firstname['und']['0']['value'] . ' ' . $user->field_lastname['und']['0']['value'];
+               $to = $user->mail;
+               $fromdate = date('M Y',strtotime('-1 month'));
+               $todate = date('M Y',strtotime('-6 months'));
+               $body = "<strong>Statistics for $fullname at $to<BR>$todate to $fromdate<BR><BR>$body"; 
+               $to = 'hotsheet@oip.net';
+               $subject = t('Month-end OIP Statistics ');
+               $from = 'dwork@oip.net';
+               $cc = 'dwork@oip.net';
+               $bcc = 'dwork@oip.net';
+               // references module "rets_bsf" for mail_hook - see rest_bsf.includes
+               $message = drupal_mail('rets_bsf', 'Monthend OIP Statistics', $to, user_preferred_language($user), array('body' => $body, 'subject' => $subject, 'headers' => array('cc' => $cc, 'Bcc' => $bcc)), $from, TRUE);
+
+          }
+        }
+     }
+}
+
+function _get_listings_at_monthend ($user) {
+      global $totals, $listingcount;
+      $totals = array();                     // define and clear totals array
+      for ($i=0; $i<=6; $i++) {
+          $totals[$i] = 0;
+       }
+       $listingcount = 0;
+ 
+      $mail = $user->mail;           // email address
+      $name = $user->name;           // login user name
+      $fullname = $user->field_firstname['und']['0']['value'] . ' ' . $user->field_lastname['und']['0']['value'];
+      $query = new EntityFieldQuery();
+      $query
+        ->entityCondition('entity_type', 'node')
+        ->entityCondition('bundle','listing')
+        ->propertyCondition('status', NODE_PUBLISHED);
+      $result=$query->execute();
+      $str = '';
+      if (isset($result['node'])) {
+        foreach ($result['node'] as $listing) {
+             $listing_node = entity_load_single('node', $listing->nid);
+             $str = $str . _get_listing_stats_at_monthend ($listing_node);
+        }
+        if (strlen(trim($str)) == 0) {         // no listings
+           $str = "Sorry, no listing statistics on file for you for the past 6 months";
+        } else {
+           $columns = "<TR><TH>Listing</TH>";
+           $columns = $columns . "<th>" . date('M Y',strtotime('-1 month')) . "</th>";
+           $columns = $columns . "<th>" . date('M Y',strtotime('-2 months')). "</th>";
+           $columns = $columns . "<th>" . date('M Y',strtotime('-3 months')). "</th>";
+           $columns = $columns . "<th>" . date('M Y',strtotime('-4 months')). "</th>";
+           $columns = $columns . "<th>" . date('M Y',strtotime('-5 months')). "</th>";
+           $columns = $columns . "<th>" . date('M Y',strtotime('-6 months')). "</th>";
+           $columns = $columns . "<th>6 mo Total</th></TR>";
+
+           // Finish up the HTML wrappers
+           $str = "<TABLE>$columns $str <TR><TD>Totals</TD>";
+           for ($i=0; $i<=6; $i++) {
+              $str = $str . "<TD align=right>$totals[$i]</TD>";
+           }
+           $str = $str . "</TR></TABLE>";
+           $str = $str . "<BR>$listingcount listings included in 6 month summary.";
+        }
+     } else {
+         $str = "Sorry, no listings on file for you";
+     }
+     return $str;
+}
+
+// return a string of counts for this listing
+function _get_listing_stats_at_monthend ($listing_node) {
+   global $totals, $listingcount;
+   $title = $listing_node->title;
+   $address = $listing_node->field_address['und']['0']['value'] . ' ' .  $listing_node->field_city['und']['0']['value'];
+   $date = date('Ym',strtotime("-1 month"));            // since this triggers on 1st day of month, get last month's stats
+   $count = oip_get_stats($title,$date);
+   if ($count == 0) {
+      return '';
+   } else {
+      $date = date('Ym',strtotime("-2 months"));            // since this triggers on 1st day of month, get last month's stats
+      $count1 = oip_get_stats($title,$date);
+      $date = date('Ym',strtotime("-3 months"));            
+      $count2 = oip_get_stats($title,$date);
+      $date = date('Ym',strtotime("-4 months"));       
+      $count3 = oip_get_stats($title,$date);
+      $date = date('Ym',strtotime("-5 months"));       
+      $count4 = oip_get_stats($title,$date);
+      $date = date('Ym',strtotime("-6 months"));          
+      $count5 = oip_get_stats($title,$date);
+      $total = $count+$count1+$count2+$count3+$count4+$count5;
+      // Build reporting string
+      $str = "<TR><TD>$title $address</TD>";
+      $str = $str . '<TD align=right>'.$count.'</TD>';
+      $str = $str . '<TD align=right>'.$count1.'</TD>';
+      $str = $str . '<TD align=right>'.$count2.'</TD>';
+      $str = $str . '<TD align=right>'.$count3.'</TD>';
+      $str = $str . '<TD align=right>'.$count4.'</TD>';
+      $str = $str . '<TD align=right>'.$count5.'</TD>';
+      $str = $str . '<TD align=right>'.$total.'</TD></TR>';
+      // Accumulate total array
+      $totals[0] = $totals[0]+$count;
+      $totals[1] = $totals[1]+$count1;
+      $totals[2] = $totals[2]+$count2;
+      $totals[3] = $totals[3]+$count3;
+      $totals[4] = $totals[4]+$count4;
+      $totals[5] = $totals[5]+$count5;
+      $totals[6] = $totals[6]+$total;
+      $listingcount++;                   
+   }
+   return $str;
+}
+
+//-----------------------------------------------------------------------------
+// Tweak views
 function oip_tweaks_form_alter(&$form, $form_state, $form_id) {
   if ($form_id == 'views_exposed_form') {
     if ($form_state['view']->name == 'listings') {
@@ -71,7 +295,8 @@ function field_fetch_field_values($entity_type, $entity, $field_name, $get_delta
             $value = array_shift(entity_load('user', array($item[$key])));
             break;
           case 'tid':
-            $value = array_shift(entity_load('taxonomy_term', array($item[$key])));
+            $ary = entity_load('taxonomy_term', array($item[$key]));
+            $value = array_shift($ary);
             break;
           case 'vid':
             $value = array_shift(entity_load('taxonomy_vocabulary', array($item[$key])));
@@ -151,7 +376,7 @@ function oip_tweaks_gettid ($vname, $name) {
   if ($result) {
     $keys = array_keys($result['taxonomy_term']);
   } else {
-    drupal_set_message(t('Error: oip_tweaks_gettid (oip.module): Taxonomy term not found -- vname: '. $vname .'; name: '.$name));
+    drupal_set_message(t('Error: oip_tweaks_gettid (oip_tweaks.module): Taxonomy term not found -- vname: '. $vname .'; name: '.$name));
     return '';
   }
   return $keys[0];

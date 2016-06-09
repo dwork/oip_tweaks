@@ -4,4 +4,3 @@ package = public-action
 version = 7.x-1.0
 core = 7.x
 files[] = oip_tweaks.module
-
