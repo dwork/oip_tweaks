@@ -1,4 +1,195 @@
 <?php
+
+/**
+ *  Get the listing data for the listing displayed on this page
+ */
+function oip_tweaks_get_listing ($listingid) {
+	global $user;
+
+	// Check to see if the Orubtabke Flyer content type has been created yet.
+	$query = new EntityFieldQuery();
+	$query->entityCondition('entity_type', 'node')
+	  ->entityCondition('bundle', 'listing')
+	  ->propertyCondition('title', $listingid);
+	$result = $query->execute();
+
+	if (isset($result['node'])) {
+	  	$listing = node_load(array_keys($result['node'])[0]);
+		return $listing;
+	}
+}
+
+/**
+ *  Get user data for the listing displayed on this page
+ *  $type = 'listingid' or 'agentid'
+ */
+function oip_tweaks_get_agent ($valueid, $type='agentid') {
+	if ($type == 'listingid') {
+		$listing = oip_tweaks_get_listing ($valueid);
+		$wrapper = entity_metadata_wrapper ('node', $listing);
+		$agentid = $wrapper->field_listingagentid->value();	
+	} else {
+		$agentid = $valueid;
+	}
+	
+	// Now, retrieve the agent data
+	$query = new EntityFieldQuery();
+	$query->entityCondition('entity_type', 'user')
+	  ->fieldCondition('field_agentid', 'value', $agentid, '=');
+	$result = $query->execute();
+	if ($result['user']) {
+		$user = user_load(array_keys($result['user'])[0]);
+ 		return $user;
+	}
+}
+
+/**
+ *  Get an agency's logo, given the agent's uid or agent's user record
+ */
+function oip_tweaks_get_agency_logo ($user) {
+	if ($pathwrapper = file_stream_wrapper_get_instance_by_uri('public://')) {
+	  $publicpath = $pathwrapper->getExternalUrl();
+	}
+	$wrapper = entity_metadata_wrapper('user',$user);
+	$agency = $wrapper->field_agency->value();
+	return $publicpath . '/' . $agency->field_company_logo['und'][0]['filename'];
+}
+
+/**
+ *   Printable flyer preprocess routine
+ */
+function oip_tweaks_get_printable_flyer ($listingid='') {
+	global $user;
+	
+	if (strlen(trim($listingid))==0) {
+		$ary = explode ('/',$_SERVER['REQUEST_URI']);
+		$listingid = $ary[count($ary)-1];
+	}
+
+	// Check to see if the Orubtabke Flyer content type has been created yet.
+	$query = new EntityFieldQuery();
+	$query->entityCondition('entity_type', 'node')
+	  ->entityCondition('bundle', 'printable_flyer')
+	  ->propertyCondition('status', NODE_PUBLISHED)
+	  ->propertyCondition('title', $listingid);
+	$result = $query->execute();
+
+	if (isset($result['node'])) {
+		$items_nids = array_keys($result['node']);
+	  	$flyers = entity_load('node', $items_nids);
+		foreach ($flyers as $flyer) {
+	  		RETURN $flyer;
+		}
+	} else {
+		// Get the listing for fields that we need to populate
+		// Check to see if the Orubtabke Flyer content type has been created yet.
+		$listing = oip_tweaks_get_listing ($listingid);
+		
+		if ($listing) {	
+			
+				// Fields used by this routine
+				$lwrapper = entity_metadata_wrapper('node',$listing);
+				$adtitle = $lwrapper->field_adtitle->value();
+
+				// Get agent info, we need the default printable flyer value
+				$agentid = $lwrapper->field_listingagentid->value();
+				$agent = oip_tweaks_get_agent ($agentid);
+				$awrapper = entity_metadata_wrapper('user',$agent);
+				if ($awrapper->__isset('field_default_flyer')) {
+					$field_flyer = $awrapper->field_default_flyer->value();
+				} else {
+					$field_flyer = oip_tweaks_gettid('flyers','Classic Flyer');
+				}
+			    
+				$showaddress = $lwrapper->field_internetaddress->value();
+			    $city = $lwrapper->field_city->value();
+			    $state = $lwrapper->field_state->value();
+			    $zip = $lwrapper->field_zipcode->value();
+			    if ($showaddress=='No') {
+			      $address = "( Call Agent for Address )";
+			    } else {
+			      $address = $lwrapper->field_address->value();
+			    }
+				$address = $address  . "     $city, $state $zip";
+				$beds = $lwrapper->field_beds->value();
+				if ($beds == intval($beds)) {
+					$beds = intval($beds);
+				}
+				($beds==1) ? ($bbs = '') : ($bbs = 's'); 
+				$baths = $lwrapper->field_baths->value();
+				if ($baths == intval($baths)) {
+					$baths = intval($baths);
+				}
+				($baths==1) ? ($bts = '') : ($bts = 's'); 
+				$bandb = '';
+				if ($beds<>0 && $beds<>0.0) {
+					if ($baths<>0 && $baths<>0.0) {
+						$bandb = "$beds Bed$bbs $baths Bath$bts";
+					} else {
+						$bandb = "$beds Bed$bts";
+					}
+				} else {
+					if ($baths<>0 && $baths<>0.0) {
+						$bandb = "$baths Bath$bts";
+					} else {
+						$bandb = $beds . ' Beds ' . $baths . ' Baths ' . '(Default)';
+					}					
+				}
+				$sqft = $lwrapper->field_sqft->value();
+				$style = $lwrapper->field_style->value();
+				$acres = $lwrapper->field_acreage->value();
+				$familyroom = $lwrapper->field_familyroom->value();
+				
+				// Default "highlights"
+				$highlights = array();
+			    $type  =  $lwrapper->field_proptype->value()[0]->name;
+			    switch ($type) {
+					case 'Residential':
+						$highlights[] = $bandb;
+						$highlights[] = $sqft . ' sqft';
+						$highlights[] = $acres . ' acres';
+						$highlights[] = $style;
+						break;
+					case 'MultiFamily':
+						$highlights[] = $banb;
+						break;
+					case 'Land':
+						break;
+					case 'Commercial':
+						break;
+					default:
+						break;
+				}
+				while (count($highlights) < 8) {		// Need 8 values
+					$highlights[] = '';
+				}
+				
+				$description = $lwrapper->body->value->value(array('sanitize' => TRUE));
+		} else {
+			$adtitle = 'ERROR: No listing loaded - ' . $listingid;
+		}
+		
+		// Create a new entry
+		$values = array(
+		  'type' => 'printable_flyer',
+		  'uid' => $user->uid,
+		  'status' => 1,
+		  'comment' => 1,
+		  'promote' => 0,
+		);
+		$flyer_data = entity_create('node', $values);
+		$ewrapper = entity_metadata_wrapper('node', $flyer_data);
+		$ewrapper->title->set($listingid);
+		$ewrapper->field_adtitle = $adtitle;
+		$ewrapper->field_flyer_address = $address;
+		$ewrapper->field_description = $description;
+		$ewrapper->field_highlight = $highlights;
+		$ewrapper->field_flyer = $field_flyer;
+		$ewrapper->save();
+		return $flyer_data;
+	}
+}
+
 /**
  * Implement hook_form_views-exposed_form_alter
  * We need to override the selection arrays to omit "Real Estate"
@@ -380,6 +571,23 @@ function oip_tweaks_gettid ($vname, $name) {
     return '';
   }
   return $keys[0];
+}
+
+// Get RMLS photo
+function oip_tweaks_get_bsfphoto($id,$num) {
+	// Pulls listing picture from OIPRETS
+	$show = '';
+	if ($num) {
+		$show = '&show=' . $num;
+	}
+	$ch = curl_init();
+ 	$timeout = 0; // set to zero for no timeout
+ 	curl_setopt ($ch, CURLOPT_URL, "http://www.oiprets.com/rets_bsf/bsfphotos.php?debug=0&id=$id$show");
+ 	curl_setopt ($ch, CURLOPT_RETURNTRANSFER, 1);
+ 	curl_setopt ($ch, CURLOPT_CONNECTTIMEOUT, $timeout);
+ 	$file_contents = curl_exec($ch);
+ 	curl_close($ch);
+ 	return $file_contents;
 }
 
 ?>
